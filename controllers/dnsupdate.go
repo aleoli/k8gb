@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/k8gb-io/k8gb/controllers/depresolver"
+	"github.com/k8gb-io/k8gb/controllers/providers/assistant"
 
 	k8gbv1beta1 "github.com/k8gb-io/k8gb/api/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -75,7 +76,8 @@ func (r *GslbReconciler) gslbDNSEndpoint(gslb *k8gbv1beta1.Gslb) (*externaldns.D
 		}
 
 		// Check if host is alive on external Gslb
-		externalTargets := r.DNSProvider.GetExternalTargets(host).GetIPs()
+		externalTargetsAndRegions := r.DNSProvider.GetExternalTargets(host)
+		externalTargets := externalTargetsAndRegions.GetIPs()
 
 		sortTargets(externalTargets)
 
@@ -132,6 +134,9 @@ func (r *GslbReconciler) gslbDNSEndpoint(gslb *k8gbv1beta1.Gslb) (*externaldns.D
 					"strategy": gslb.Spec.Strategy.Type,
 				},
 			}
+			for k, v := range r.getLabels(gslb, externalTargetsAndRegions) {
+				dnsRecord.Labels[k] = v
+			}
 			gslbHosts = append(gslbHosts, dnsRecord)
 		}
 	}
@@ -165,4 +170,20 @@ func (r *GslbReconciler) updateRuntimeStatus(gslb *k8gbv1beta1.Gslb, isPrimary b
 	case depresolver.FailoverStrategy:
 		m.UpdateFailoverStatus(gslb, isPrimary, isHealthy, finalTargets)
 	}
+}
+
+// getLabels map of where key identifies region and weight, value identifies IP.
+func (r *GslbReconciler) getLabels(gslb *k8gbv1beta1.Gslb, targets assistant.Targets) (labels map[string]string) {
+	labels = make(map[string]string, 0)
+	for k, v := range gslb.Spec.Strategy.Weight {
+		t, found := targets[k]
+		if !found {
+			continue
+		}
+		for i, ip := range t.IPs {
+			l := fmt.Sprintf("weight-%s-%v-%v", k, i, v.Int())
+			labels[l] = ip
+		}
+	}
+	return labels
 }
